@@ -1,0 +1,14 @@
+services:
+  downloader:
+    build: .
+    container_name: zoom-earth-downloader
+    restart: unless-stopped
+    volumes:
+      # 将主机当前目录下的 'data/tiles' 文件夹映射到容器内的 '/data/tiles'
+      - ./data/tiles:/data/tiles
+    # (可选) 挂载 .env 文件，方便在不重建镜像的情况下修改配置
+    env_file:
+      - .env
+    # 确保容器内的脚本也使用 /data/tiles 作为下载路径
+    environment:
+      - DOWNLOAD_PATH=/data/tiles
