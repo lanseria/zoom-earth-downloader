@@ -1,5 +1,5 @@
 # 使用官方的 Python slim 镜像作为基础
-FROM python:3.11-slim
+FROM docker.m.daocloud.io/python:3.12-slim-bookworm
 
 # 设置工作目录
 WORKDIR /app

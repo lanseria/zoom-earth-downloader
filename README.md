@@ -43,7 +43,7 @@
     使用 Docker Compose 在后台构建并启动服务。
 
     ```bash
-    docker-compose up -d
+    docker compose up -d --build
     ```
 
     -   第一次运行时，Docker 会根据 `Dockerfile` 构建镜像，这可能需要几分钟。
@@ -54,7 +54,7 @@
     你可以查看容器的实时日志来监控下载进度。
 
     ```bash
-    docker-compose logs -f
+    docker compose logs -f
     ```
 
 5.  **访问瓦片**
@@ -64,7 +64,7 @@
 6.  **停止服务**
 
     ```bash
-    docker-compose down
+    docker compose down
     ```
 
 ---
