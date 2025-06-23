@@ -33,7 +33,6 @@ HEADERS = {
     'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
 }
 
-# 使用经过验证的瓦片范围，确保只下载真实存在的瓦片。
 HARDCODED_RANGES = {
     "himawari": {
         3: {"x": range(2, 6), "y_ranges": [range(0, 1), range(5, 8)]},
@@ -44,7 +43,6 @@ HARDCODED_RANGES = {
     }
 }
 
-# --- 日志配置 ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -53,9 +51,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- 全局变量和锁 ---
-# 用于在多线程环境下安全地更新时间戳记录
 timestamp_lock = threading.Lock()
-
+# vvvvvvvvvvvvvv 新增进度计数器和锁 vvvvvvvvvvvvvv
+progress_lock = threading.Lock()
+processed_count = 0
+# ^^^^^^^^^^^^^^ 新增部分 ^^^^^^^^^^^^^^
 
 def get_tile_ranges_for_satellite(zoom, satellite):
     sat_ranges = HARDCODED_RANGES.get(satellite)
@@ -66,7 +66,6 @@ def get_tile_ranges_for_satellite(zoom, satellite):
         raise ValueError(f"未找到卫星 '{satellite}' 在 zoom={zoom} 的硬编码范围定义。")
     return zoom_ranges["x"], zoom_ranges["y_ranges"]
 
-# --- 核心功能 ---
 def fetch_latest_timestamps(satellite: str) -> list[int]:
     try:
         logger.info(f"正在从 {API_URL} 获取最新时间戳...")
@@ -81,21 +80,16 @@ def fetch_latest_timestamps(satellite: str) -> list[int]:
         return []
 
 def download_tile(satellite: str, timestamp: int, zoom: int, x: int, y: int) -> tuple:
-    """下载单个瓦片，如果成功，返回状态和时间戳，否则只返回状态。"""
     dt = datetime.fromtimestamp(timestamp, timezone.utc)
     date_str = dt.strftime("%Y-%m-%d")
     time_str = dt.strftime("%H%M")
     save_path = BASE_DOWNLOAD_PATH / satellite / str(zoom) / str(x) / str(y)
     file_path = save_path / f"{timestamp}.jpg"
-
     if file_path.exists():
-        # 即使文件已存在，我们依然认为这个时间戳是“有效”的
         return "skipped", satellite, timestamp
-
     save_path.mkdir(parents=True, exist_ok=True)
     url = f"https://tiles.zoom.earth/geocolor/{satellite}/{date_str}/{time_str}/{zoom}/{x}/{y}.jpg"
     temp_file = file_path.with_suffix(".tmp")
-
     try:
         response = requests.get(url, headers=HEADERS, stream=True, timeout=20)
         response.raise_for_status()
@@ -103,11 +97,9 @@ def download_tile(satellite: str, timestamp: int, zoom: int, x: int, y: int) -> 
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         if temp_file.stat().st_size < 200:
-            logger.warning(f"下载的文件过小，可能为空图，已删除: {url}")
             temp_file.unlink()
             return "failed_small", satellite, None
         temp_file.rename(file_path)
-        # 成功下载，返回状态和时间戳
         return "downloaded", satellite, timestamp
     except requests.exceptions.RequestException as e:
         if 'temp_file' in locals() and temp_file.exists():
@@ -119,17 +111,10 @@ def download_tile(satellite: str, timestamp: int, zoom: int, x: int, y: int) -> 
         return "failed", satellite, None
 
 def update_timestamp_record(satellite: str, new_timestamps: set):
-    """
-    读取、更新并写回指定卫星的时间戳记录文件。
-    这是一个原子操作，通过文件锁确保数据一致性。
-    """
     if not new_timestamps:
         return
-
-    # 文件路径位于 /data/tiles/himawari/timestamps.json
     record_file = BASE_DOWNLOAD_PATH / satellite / "timestamps.json"
     record_file.parent.mkdir(parents=True, exist_ok=True)
-
     with timestamp_lock:
         try:
             if record_file.exists():
@@ -137,7 +122,6 @@ def update_timestamp_record(satellite: str, new_timestamps: set):
                     existing_timestamps = set(json.load(f))
             else:
                 existing_timestamps = set()
-
             updated_count = len(new_timestamps - existing_timestamps)
             if updated_count > 0:
                 all_timestamps = sorted(list(existing_timestamps.union(new_timestamps)))
@@ -146,11 +130,12 @@ def update_timestamp_record(satellite: str, new_timestamps: set):
                 logger.info(f"时间戳记录文件 '{record_file.name}' 已更新，新增 {updated_count} 个时间点。")
             else:
                 logger.info("没有新的时间戳需要记录。")
-
         except (IOError, json.JSONDecodeError) as e:
             logger.error(f"读写时间戳记录文件失败: {e}")
 
 def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
+    global processed_count # 声明我们要修改全局变量
+    
     if is_debug_run:
         logger.info("=============================================")
         logger.info(f"开始执行调试任务，卫星: {SATELLITE}, Zoom: {debug_zoom}")
@@ -183,21 +168,30 @@ def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
             logger.error(f"无法为 Zoom {zoom} 生成任务: {e}")
             continue
 
-    logger.info(f"共计生成 {len(tasks)} 个潜在下载任务。")
+    total_tasks = len(tasks)
+    logger.info(f"共计生成 {total_tasks} 个潜在下载任务。")
     if not tasks:
         return
 
     stats = {"downloaded": 0, "skipped": 0, "failed": 0, "failed_small": 0}
-    # 用于收集本次任务中所有成功下载或已存在的瓦片对应的时间戳
     successful_timestamps = set()
+    processed_count = 0 # 重置计数器
 
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
         futures = [executor.submit(download_tile, *task) for task in tasks]
         for future in as_completed(futures):
+            # vvvvvvvvvvvvvv 进度报告逻辑 vvvvvvvvvvvvvv
+            with progress_lock:
+                processed_count += 1
+                # 每处理 500 个任务，或者最后一个任务完成时，打印一次进度
+                if processed_count % 500 == 0 or processed_count == total_tasks:
+                    logger.info(f"处理进度: {processed_count} / {total_tasks} ({(processed_count/total_tasks)*100:.1f}%)")
+            # ^^^^^^^^^^^^^^ 进度报告逻辑 ^^^^^^^^^^^^^^
+            
             try:
                 status, satellite, timestamp = future.result()
                 stats[status] += 1
-                if timestamp: # 如果返回了有效的时间戳
+                if timestamp:
                     successful_timestamps.add(timestamp)
             except Exception as exc:
                 logger.error(f"一个下载任务产生未知异常: {exc}")
@@ -208,7 +202,6 @@ def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
     logger.info(f"  - 已跳过: {stats['skipped']}")
     logger.info(f"  - 下载失败: {stats['failed'] + stats['failed_small']}")
     
-    # 在所有下载任务完成后，更新时间戳记录文件
     update_timestamp_record(SATELLITE, successful_timestamps)
     
     logger.info("=============================================\n")
@@ -216,6 +209,7 @@ def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Zoom Earth Tile Downloader")
+    # ... (这部分保持不变) ...
     parser.add_argument(
         "mode",
         nargs='?',
@@ -226,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--zoom",
         type=int,
-        default=7,
+        default=3,
         help="在 'run-once' 模式下，指定要测试的 zoom 等级。"
     )
     args = parser.parse_args()

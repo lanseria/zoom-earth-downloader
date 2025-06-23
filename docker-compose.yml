@@ -1,14 +1,28 @@
+
 services:
   downloader:
     build: .
     container_name: zoom-earth-downloader
     restart: unless-stopped
+    
+    # ----------------- 关键修改部分开始 -----------------
     volumes:
-      # 将主机当前目录下的 'data/tiles' 文件夹映射到容器内的 '/data/tiles'
-      - ./data/tiles:/data/tiles
+      # 这里是动态卷映射的关键：
+      # - "${HOST_DATA_PATH}:/data/tiles"
+      # 它会读取 .env 文件中的 HOST_DATA_PATH 变量的值，
+      # 并将其作为卷映射的主机端路径。
+      # 
+      # 例如，如果 HOST_DATA_PATH=/home/user/my-data，
+      # Docker Compose 会执行的映射就是：/home/user/my-data:/data/tiles
+      - "${HOST_DATA_PATH}:/data/tiles"
+    # ----------------- 关键修改部分结束 -----------------
+      
     # (可选) 挂载 .env 文件，方便在不重建镜像的情况下修改配置
+    # 注意：Docker Compose v2.20+ 默认就会加载 .env 文件，
+    # 所以这行不是严格必需的，但保留它可以增强可读性。
     env_file:
       - .env
+      
     # 确保容器内的脚本也使用 /data/tiles 作为下载路径
     environment:
       - DOWNLOAD_PATH=/data/tiles
