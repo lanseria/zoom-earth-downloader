@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SATELLITE = os.getenv("SATELLITE", "himawari")
-MIN_ZOOM = int(os.getenv("MIN_ZOOM", "1"))
+MIN_ZOOM = int(os.getenv("MIN_ZOOM", "3"))
 MAX_ZOOM = int(os.getenv("MAX_ZOOM", "7"))
 BASE_DOWNLOAD_PATH = Path(os.getenv("DOWNLOAD_PATH", "./data/tiles"))
 CHECK_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "3"))
@@ -36,8 +36,6 @@ HEADERS = {
 # 使用经过验证的瓦片范围，确保只下载真实存在的瓦片。
 HARDCODED_RANGES = {
     "himawari": {
-        1: {"x": range(1, 2), "y_ranges": [range(0, 2)]},
-        2: {"x": range(2, 4), "y_ranges": [range(0, 1), range(2, 4)]},
         3: {"x": range(2, 6), "y_ranges": [range(0, 1), range(5, 8)]},
         4: {"x": range(4, 12), "y_ranges": [range(0, 1), range(11, 16)]},
         5: {"x": range(11, 20), "y_ranges": [range(23, 32)]},
