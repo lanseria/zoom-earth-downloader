@@ -50,12 +50,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- 全局变量和锁 ---
 timestamp_lock = threading.Lock()
-# vvvvvvvvvvvvvv 新增进度计数器和锁 vvvvvvvvvvvvvv
 progress_lock = threading.Lock()
 processed_count = 0
-# ^^^^^^^^^^^^^^ 新增部分 ^^^^^^^^^^^^^^
 
 def get_tile_ranges_for_satellite(zoom, satellite):
     sat_ranges = HARDCODED_RANGES.get(satellite)
@@ -133,8 +130,20 @@ def update_timestamp_record(satellite: str, new_timestamps: set):
         except (IOError, json.JSONDecodeError) as e:
             logger.error(f"读写时间戳记录文件失败: {e}")
 
+def get_local_timestamps(satellite: str) -> set:
+    """从本地文件加载已记录的时间戳"""
+    record_file = BASE_DOWNLOAD_PATH / satellite / "timestamps.json"
+    if not record_file.exists():
+        return set()
+    try:
+        with open(record_file, 'r') as f:
+            return set(json.load(f))
+    except (IOError, json.JSONDecodeError) as e:
+        logger.warning(f"读取本地时间戳记录失败: {e}, 将作为首次运行处理。")
+        return set()
+
 def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
-    global processed_count # 声明我们要修改全局变量
+    global processed_count
     
     if is_debug_run:
         logger.info("=============================================")
@@ -145,21 +154,35 @@ def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
         logger.info(f"开始执行下载任务，卫星: {SATELLITE}, Zooms: {MIN_ZOOM}-{MAX_ZOOM}")
         zoom_levels = range(MIN_ZOOM, MAX_ZOOM + 1)
 
-    timestamps = fetch_latest_timestamps(SATELLITE)
-    if not timestamps:
-        logger.warning("未获取到任何时间戳，本次任务结束。")
+    remote_timestamps = set(fetch_latest_timestamps(SATELLITE))
+    if not remote_timestamps:
+        logger.warning("未获取到任何远程时间戳，本次任务结束。")
         return
 
-    if is_debug_run and timestamps:
-        timestamps = timestamps[:1]
-        logger.info(f"调试模式：仅使用最新时间戳: {timestamps[0]}")
+    # vvvvvvvvvvvvvv 增量更新核心逻辑 vvvvvvvvvvvvvv
+    if is_debug_run:
+        # 调试模式下，总是只处理最新的一个远程时间戳
+        timestamps_to_process = {sorted(list(remote_timestamps), reverse=True)[0]} if remote_timestamps else set()
+        logger.info(f"调试模式：仅使用最新时间戳: {list(timestamps_to_process)[0] if timestamps_to_process else 'N/A'}")
+    else:
+        # 服务模式下，计算增量
+        local_timestamps = get_local_timestamps(SATELLITE)
+        timestamps_to_process = remote_timestamps - local_timestamps
+        logger.info(f"本地已记录 {len(local_timestamps)} 个时间戳，发现 {len(timestamps_to_process)} 个新时间戳需要处理。")
+    # ^^^^^^^^^^^^^^ 增量更新核心逻辑 ^^^^^^^^^^^^^^
 
+    if not timestamps_to_process:
+        logger.info("所有时间戳均已处理，无需下载。任务结束。")
+        logger.info("=============================================\n")
+        return
+    
     tasks = []
     for zoom in zoom_levels:
         try:
             x_range, y_ranges_list = get_tile_ranges_for_satellite(zoom, SATELLITE)
             logger.info(f"Zoom {zoom}: 使用硬编码范围 X: {list(x_range)}, Y 范围列表: {[list(r) for r in y_ranges_list]}")
-            for ts in timestamps:
+            # 只为新时间戳生成任务
+            for ts in timestamps_to_process:
                 for x in x_range:
                     for y_range in y_ranges_list:
                         for y in y_range:
@@ -169,27 +192,25 @@ def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
             continue
 
     total_tasks = len(tasks)
-    logger.info(f"共计生成 {total_tasks} 个潜在下载任务。")
+    logger.info(f"共计为新时间戳生成 {total_tasks} 个潜在下载任务。")
     if not tasks:
         return
 
     stats = {"downloaded": 0, "skipped": 0, "failed": 0, "failed_small": 0}
+    # 注意：现在 successful_timestamps 应该包含新处理的和已存在的
+    # 所以我们把它和 remote_timestamps 做个并集
     successful_timestamps = set()
-    processed_count = 0 # 重置计数器
+    processed_count = 0 
 
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
         futures = [executor.submit(download_tile, *task) for task in tasks]
         for future in as_completed(futures):
-            # vvvvvvvvvvvvvv 进度报告逻辑 vvvvvvvvvvvvvv
             with progress_lock:
                 processed_count += 1
-                # 每处理 500 个任务，或者最后一个任务完成时，打印一次进度
                 if processed_count % 500 == 0 or processed_count == total_tasks:
                     logger.info(f"处理进度: {processed_count} / {total_tasks} ({(processed_count/total_tasks)*100:.1f}%)")
-            # ^^^^^^^^^^^^^^ 进度报告逻辑 ^^^^^^^^^^^^^^
-            
             try:
-                status, satellite, timestamp = future.result()
+                status, _, timestamp = future.result()
                 stats[status] += 1
                 if timestamp:
                     successful_timestamps.add(timestamp)
@@ -199,9 +220,10 @@ def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
 
     logger.info("任务执行完毕。统计:")
     logger.info(f"  - 新下载: {stats['downloaded']}")
-    logger.info(f"  - 已跳过: {stats['skipped']}")
+    logger.info(f"  - 已跳过: {stats['skipped']} (这在增量模式下应该很少见)")
     logger.info(f"  - 下载失败: {stats['failed'] + stats['failed_small']}")
     
+    # 将本次处理成功的时间戳更新到总记录中
     update_timestamp_record(SATELLITE, successful_timestamps)
     
     logger.info("=============================================\n")
@@ -209,7 +231,6 @@ def run_download_job(is_debug_run: bool = False, debug_zoom: int = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Zoom Earth Tile Downloader")
-    # ... (这部分保持不变) ...
     parser.add_argument(
         "mode",
         nargs='?',
