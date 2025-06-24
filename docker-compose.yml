@@ -26,3 +26,24 @@ services:
     # 确保容器内的脚本也使用 /data/tiles 作为下载路径
     environment:
       - DOWNLOAD_PATH=/data/tiles
+  # ----------------- 新增 GIS 服务器服务 -----------------
+  gis-server:
+    # 使用官方的 Nginx 镜像
+    image: docker.m.daocloud.io/nginx:1.25-alpine
+    container_name: gis-tile-server
+    restart: unless-stopped
+    ports:
+      # 将主机的 8080 端口映射到容器的 80 端口
+      # 你可以根据需要修改主机端口，例如 "80:80"
+      - "8080:80"
+    volumes:
+      # 1. 将我们上面创建的 nginx.conf 挂载到容器中，覆盖默认配置
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      
+      # 2. 将存储瓦片的主机路径以只读(ro)模式挂载到 Nginx 的服务目录
+      #    Nginx 只需要读取这些文件，不需要写入，所以用只读模式更安全
+      - "${HOST_DATA_PATH}:/usr/share/nginx/html:ro"
+    
+    # 确保 downloader 服务先启动 (虽然不是强依赖，但逻辑上更清晰)
+    depends_on:
+      - downloader
