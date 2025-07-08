@@ -34,12 +34,20 @@ HEADERS = {
 }
 
 HARDCODED_RANGES = {
+    # "himawari": {
+    #     3: {"x": range(2, 6), "y_ranges": [range(0, 1), range(5, 8)]},
+    #     4: {"x": range(4, 12), "y_ranges": [range(0, 1), range(11, 16)]},
+    #     5: {"x": range(11, 20), "y_ranges": [range(23, 32)]},
+    #     6: {"x": range(16, 48), "y_ranges": [range(0, 1), range(47, 64)]},
+    #     7: {"x": range(32, 96), "y_ranges": [range(0, 2), range(95, 128)]},
+    # }
+    ## 仅用于中国地图
     "himawari": {
-        3: {"x": range(2, 6), "y_ranges": [range(0, 1), range(5, 8)]},
-        4: {"x": range(4, 12), "y_ranges": [range(0, 1), range(11, 16)]},
-        5: {"x": range(11, 20), "y_ranges": [range(23, 32)]},
-        6: {"x": range(16, 48), "y_ranges": [range(0, 1), range(47, 64)]},
-        7: {"x": range(32, 96), "y_ranges": [range(0, 2), range(95, 128)]},
+        3: {"x": range(2, 4), "y_ranges": [range(0, 1), range(5, 8)]},
+        4: {"x": range(4, 8), "y_ranges": [range(0, 1), range(11, 16)]},
+        5: {"x": range(11, 16), "y_ranges": [range(23, 32)]},
+        6: {"x": range(16, 32), "y_ranges": [range(0, 1), range(47, 64)]},
+        7: {"x": range(32, 64), "y_ranges": [range(0, 2), range(95, 128)]},
     }
 }
 
