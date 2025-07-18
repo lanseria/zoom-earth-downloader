@@ -5,15 +5,7 @@ services:
     container_name: zoom-earth-downloader
     restart: unless-stopped
     
-    # ----------------- 关键修改部分开始 -----------------
     volumes:
-      # 这里是动态卷映射的关键：
-      # - "${HOST_DATA_PATH}:/data/tiles"
-      # 它会读取 .env 文件中的 HOST_DATA_PATH 变量的值，
-      # 并将其作为卷映射的主机端路径。
-      # 
-      # 例如，如果 HOST_DATA_PATH=/home/user/my-data，
-      # Docker Compose 会执行的映射就是：/home/user/my-data:/data/tiles
       - "${HOST_DATA_PATH}:/data/tiles"
     # ----------------- 关键修改部分结束 -----------------
       
@@ -26,20 +18,3 @@ services:
     # 确保容器内的脚本也使用 /data/tiles 作为下载路径
     environment:
       - DOWNLOAD_PATH=/data/tiles
-  # ----------------- 新增 GIS 服务器服务 -----------------
-  gis-server:
-    # 使用官方的 Nginx 镜像
-    image: docker.m.daocloud.io/nginx:1.25
-    container_name: gis-tile-server
-    restart: unless-stopped
-    ports:
-      # 将主机的 8080 端口映射到容器的 80 端口
-      # 你可以根据需要修改主机端口，例如 "80:80"
-      - "8080:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - "${HOST_DATA_PATH}:/usr/share/nginx/html:ro"
-    
-    # 确保 downloader 服务先启动 (虽然不是强依赖，但逻辑上更清晰)
-    depends_on:
-      - downloader
