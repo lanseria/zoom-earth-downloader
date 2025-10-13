@@ -115,7 +115,7 @@
 
         ```bash
         # 默认测试 zoom=1 的情况
-        python src/main.py run-once
+        python src/main.py run-once --zoom 3
 
         # 测试 zoom=5 的情况
         python src/main.py run-once --zoom 5
