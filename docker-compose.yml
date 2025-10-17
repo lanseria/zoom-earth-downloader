@@ -11,4 +11,5 @@ services:
       - .env.production
       
     environment:
+      - TZ=Asia/Shanghai
       - DOWNLOAD_PATH=/data/tiles
