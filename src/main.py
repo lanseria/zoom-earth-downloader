@@ -195,7 +195,7 @@ def run_download_task(is_debug_run: bool = False, debug_zoom: int | None = None)
 
     if is_debug_run:
         if remote_timestamps:
-            latest_ts = sorted(list(remote_timestamps), reverse=True)
+            latest_ts = sorted(list(remote_timestamps), reverse=True)[0]
             timestamps_to_process = {latest_ts}
             logger.info(f"调试模式：仅使用最新时间戳: {latest_ts}")
         else:

@@ -114,7 +114,7 @@
         脚本会执行一次下载任务，然后立即退出。这非常适合测试代码改动。
 
         ```bash
-        # 默认测试 zoom=1 的情况
+        # 默认测试 zoom=3 的情况
         python src/main.py run-once --zoom 3
 
         # 测试 zoom=5 的情况
