@@ -13,7 +13,6 @@ import requests
 import schedule
 from dotenv import load_dotenv
 
-# --- [!] 优化点: 将所有配置和全局变量集中管理，提高可读性 ---
 class Config:
     """应用配置类"""
     def __init__(self):
@@ -22,7 +21,7 @@ class Config:
         self.MIN_ZOOM = int(os.getenv("MIN_ZOOM", "4"))
         self.MAX_ZOOM = int(os.getenv("MAX_ZOOM", "7"))
         self.BASE_DOWNLOAD_PATH = Path(os.getenv("DOWNLOAD_PATH", "./data/tiles"))
-        self.CHECK_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "3"))
+        self.CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "10"))
         self.CONCURRENCY = int(os.getenv("CONCURRENCY", "10"))
         self.CLEANUP_DAYS = int(os.getenv("CLEANUP_DAYS", "30"))
         self.API_URL = "https://tiles.zoom.earth/times/geocolor.json"
@@ -374,9 +373,9 @@ def main():
         logger.info(f"以 'run-once' 模式启动，将仅执行一次调试下载任务。")
         run_download_task(is_debug_run=True, debug_zoom=args.zoom)
     else: # mode == "service"
-        logger.info(f"服务启动，将每隔 {config.CHECK_INTERVAL_HOURS} 小时执行一次完整任务周期。")
+        logger.info(f"服务启动，将每隔 {config.CHECK_INTERVAL_MINUTES} 分钟执行一次完整任务周期。")
         run_job_cycle()
-        schedule.every(config.CHECK_INTERVAL_HOURS).hours.do(run_job_cycle)
+        schedule.every(config.CHECK_INTERVAL_MINUTES).minutes.do(run_job_cycle)
         while True:
             schedule.run_pending()
             time.sleep(60)
