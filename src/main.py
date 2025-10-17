@@ -177,7 +177,7 @@ def get_local_timestamps(satellite: str, read_from_file: bool = True) -> set:
         return set()
 
 def run_download_task(is_debug_run: bool = False, debug_zoom: int | None = None):
-    """执行瓦片下载的核心逻辑"""
+    """执行瓦片下载的核心逻辑，包含重试机制"""
     task_name = "调试下载" if is_debug_run else "增量下载"
     logger.info(f"--- 开始执行{task_name}任务 ---")
     
@@ -194,9 +194,8 @@ def run_download_task(is_debug_run: bool = False, debug_zoom: int | None = None)
         return
 
     if is_debug_run:
-        # [!] 优化点: 处理 remote_timestamps 为空的边界情况
         if remote_timestamps:
-            latest_ts = sorted(list(remote_timestamps), reverse=True)[0]
+            latest_ts = sorted(list(remote_timestamps), reverse=True)
             timestamps_to_process = {latest_ts}
             logger.info(f"调试模式：仅使用最新时间戳: {latest_ts}")
         else:
@@ -211,7 +210,7 @@ def run_download_task(is_debug_run: bool = False, debug_zoom: int | None = None)
         logger.info(f"--- {task_name}任务结束 ---")
         return
     
-    tasks = []
+    initial_tasks = []
     for zoom in zoom_levels:
         try:
             x_range, y_ranges_list = get_tile_ranges_for_satellite(zoom, config.SATELLITE)
@@ -219,41 +218,72 @@ def run_download_task(is_debug_run: bool = False, debug_zoom: int | None = None)
                 for x in x_range:
                     for y_range in y_ranges_list:
                         for y in y_range:
-                            tasks.append((config.SATELLITE, ts, zoom, x, y))
+                            initial_tasks.append((config.SATELLITE, ts, zoom, x, y))
         except ValueError as e:
             logger.error(f"无法为 Zoom {zoom} 生成任务: {e}")
 
-    total_tasks = len(tasks)
-    if not tasks:
+    if not initial_tasks:
         logger.info("未生成任何下载任务。")
         logger.info(f"--- {task_name}任务结束 ---")
         return
-    logger.info(f"共计为新时间戳生成 {total_tasks} 个潜在下载任务。")
+    
+    logger.info(f"共计为新时间戳生成 {len(initial_tasks)} 个潜在下载任务。")
     
     stats = {"downloaded": 0, "skipped": 0, "failed": 0, "failed_small": 0}
     successful_timestamps = set()
-    app_state.reset_progress()
+    tasks_to_process = initial_tasks
+    
+    MAX_DOWNLOAD_ATTEMPTS = 3 # 1次初始尝试 + 2次重试
 
-    with ThreadPoolExecutor(max_workers=config.CONCURRENCY) as executor:
-        futures = {executor.submit(download_tile, *task): task for task in tasks}
-        for future in as_completed(futures):
-            current_count = app_state.increment_progress()
-            if current_count % 500 == 0 or current_count == total_tasks:
-                logger.info(f"下载进度: {current_count} / {total_tasks} ({(current_count/total_tasks)*100:.1f}%)")
-            try:
-                status, _, timestamp = future.result()
-                stats[status] += 1
-                if timestamp:
-                    successful_timestamps.add(timestamp)
-            except Exception as exc:
-                task_info = futures[future]
-                logger.error(f"任务 {task_info} 产生未知异常: {exc}")
-                stats["failed"] += 1
+    for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
+        if not tasks_to_process:
+            break # 如果没有需要处理的任务了，提前退出循环
 
-    logger.info("下载任务执行完毕。统计:")
+        is_retry = attempt > 1
+        attempt_name = f"重试 {attempt - 1}/{MAX_DOWNLOAD_ATTEMPTS - 1}" if is_retry else f"尝试 {attempt}/{MAX_DOWNLOAD_ATTEMPTS}"
+        logger.info(f"--- 开始第 {attempt} 轮下载 ({attempt_name}) ---")
+        logger.info(f"本轮需要处理 {len(tasks_to_process)} 个任务。")
+        
+        failed_in_this_attempt = []
+        app_state.reset_progress()
+        total_in_this_attempt = len(tasks_to_process)
+
+        with ThreadPoolExecutor(max_workers=config.CONCURRENCY) as executor:
+            futures = {executor.submit(download_tile, *task): task for task in tasks_to_process}
+            for future in as_completed(futures):
+                current_count = app_state.increment_progress()
+                if current_count % 500 == 0 or current_count == total_in_this_attempt:
+                    progress = (current_count / total_in_this_attempt) * 100
+                    logger.info(f"本轮下载进度: {current_count} / {total_in_this_attempt} ({progress:.1f}%)")
+                
+                try:
+                    status, _, timestamp = future.result()
+                    if status == "failed":
+                        failed_in_this_attempt.append(futures[future])
+                    else:
+                        stats[status] += 1
+                        if timestamp:
+                            successful_timestamps.add(timestamp)
+                except Exception as exc:
+                    task_info = futures[future]
+                    logger.error(f"任务 {task_info} 产生未知异常: {exc}")
+                    failed_in_this_attempt.append(task_info)
+        
+        tasks_to_process = failed_in_this_attempt
+        if tasks_to_process:
+            logger.warning(f"第 {attempt} 轮下载完成，有 {len(tasks_to_process)} 个任务失败，将进行重试。")
+        else:
+            logger.info(f"第 {attempt} 轮下载成功完成，没有失败的任务。")
+
+    # 循环结束后，仍然在 tasks_to_process 列表中的任务是最终失败的
+    if tasks_to_process:
+        stats["failed"] = len(tasks_to_process)
+        logger.error(f"经过 {MAX_DOWNLOAD_ATTEMPTS} 次尝试后，仍有 {stats['failed']} 个任务最终下载失败。")
+
+    logger.info("下载任务执行完毕。最终统计:")
     logger.info(f"  - 新下载: {stats['downloaded']}")
     logger.info(f"  - 已跳过: {stats['skipped']}")
-    logger.info(f"  - 下载失败 (网络/错误): {stats['failed']}")
+    logger.info(f"  - 最终失败 (网络/错误): {stats['failed']}")
     logger.info(f"  - 下载失败 (文件过小): {stats['failed_small']}")
     
     update_timestamp_record(config.SATELLITE, successful_timestamps)
